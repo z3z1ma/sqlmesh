@@ -217,6 +217,27 @@ class ConsoleNotificationTarget(BaseNotificationTarget):
             self.console.log_status_update(msg)
 
 
+def _pretty_slack_message(notification_status: NotificationStatus, msg: str) -> t.Dict[str, t.Any]:
+    status_emoji = {
+        NotificationStatus.PROGRESS: slack.SlackAlertIcon.START,
+        NotificationStatus.SUCCESS: slack.SlackAlertIcon.SUCCESS,
+        NotificationStatus.FAILURE: slack.SlackAlertIcon.FAILURE,
+        NotificationStatus.WARNING: slack.SlackAlertIcon.WARNING,
+        NotificationStatus.INFO: slack.SlackAlertIcon.INFO,
+    }
+    composed = slack.message().add_primary_blocks(
+        slack.header_block(f"{status_emoji[notification_status]} SQLMesh Notification"),
+        slack.context_block(
+            f"*Status:* {notification_status.value}",
+            f"*Command:* {slack.stringify_list(sys.argv)}",
+        ),
+        slack.divider_block(),
+        slack.text_section_block(msg),
+        slack.context_block(f"*Python Version:* {sys.version}"),
+    )
+    return dict(composed.slack_message)
+
+
 class SlackWebhookNotificationTarget(BaseNotificationTarget):
     url: t.Optional[str] = None
     type_: Literal["slack_webhook"] = Field(alias="type", default="slack_webhook")
@@ -239,27 +260,7 @@ class SlackWebhookNotificationTarget(BaseNotificationTarget):
         return self._client
 
     def send(self, notification_status: NotificationStatus, msg: str, **kwargs: t.Any) -> None:
-        status_emoji = {
-            NotificationStatus.PROGRESS: slack.SlackAlertIcon.START,
-            NotificationStatus.SUCCESS: slack.SlackAlertIcon.SUCCESS,
-            NotificationStatus.FAILURE: slack.SlackAlertIcon.FAILURE,
-            NotificationStatus.WARNING: slack.SlackAlertIcon.WARNING,
-            NotificationStatus.INFO: slack.SlackAlertIcon.INFO,
-        }
-        composed = slack.message().add_primary_blocks(
-            slack.header_block(f"{status_emoji[notification_status]} SQLMesh Notification"),
-            slack.context_block(
-                f"*Status:* {notification_status.value}",
-                f"*Command:* {slack.stringify_list(sys.argv)}",
-            ),
-            slack.divider_block(),
-            slack.text_section_block(msg),
-            slack.context_block(f"*Python Version:* {sys.version}"),
-        )
-        self.client.send(
-            blocks=composed.slack_message["blocks"],
-            attachments=composed.slack_message["attachments"],  # type: ignore
-        )
+        self.client.send(**_pretty_slack_message(notification_status, msg))
 
     @property
     def is_configured(self) -> bool:
@@ -289,7 +290,9 @@ class SlackApiNotificationTarget(BaseNotificationTarget):
         if not self.channel:
             raise ConfigError("Missing Slack channel for notification")
 
-        self.client.chat_postMessage(channel=self.channel, text=msg)
+        self.client.chat_postMessage(
+            channel=self.channel, **_pretty_slack_message(notification_status, msg)
+        )
 
     @property
     def is_configured(self) -> bool:
