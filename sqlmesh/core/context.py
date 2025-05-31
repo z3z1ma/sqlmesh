@@ -2888,6 +2888,69 @@ class GenericContext(BaseContext, t.Generic[C]):
 
         return model_tests
 
+    @python_api_analytics
+    def profile_model(self, model_name: str, environment: t.Optional[str] = None) -> DF:
+        """Returns a DataFrame with the descriptive statistics of the model's physical table.
+
+        Args:
+            model_name: The name of the model.
+            environment: The environment to source the model version from.
+
+        Returns:
+            The DataFrame with the describe results
+        """
+
+        try:
+            import ibis
+            from ibis.expr.operations import Namespace, UnboundTable
+            from ibis.backends.sql.datatypes import DuckDBType
+        except ImportError as e:
+            raise SQLMeshError(
+                "Ibis is required to profile models. Please install it with `pip install ibis-framework`."
+            ) from e
+
+        environment = environment or self.config.default_target_environment
+        fqn = self._node_or_snapshot_to_fqn(model_name)
+        target_env = self.state_reader.get_environment(environment)
+        if not target_env:
+            raise SQLMeshError(f"Environment '{environment}' was not found.")
+
+        snapshot_info = None
+        for s in target_env.snapshots:
+            if s.name == fqn:
+                snapshot_info = s
+                break
+        if not snapshot_info:
+            raise SQLMeshError(
+                f"Model '{model_name}' was not found in environment '{environment}'."
+            )
+
+        snapshots = self.state_reader.get_snapshots(target_env.snapshots)
+        deployability_index = DeployabilityIndex.create(snapshots)
+
+        phys_table_str = snapshot_info.table_name(
+            is_deployable=deployability_index.is_deployable(snapshot_info.snapshot_id)
+        )
+        phys_table = exp.to_table(phys_table_str)
+
+        this = snapshots[snapshot_info.snapshot_id]
+        if not (schema := this.model.columns_to_types):
+            raise SQLMeshError(
+                f"Model '{model_name}' has no columns defined. Please define columns in the model."
+            )
+
+        ibis_wrapper = UnboundTable(
+            name=phys_table.name,
+            schema={k: DuckDBType.to_ibis(v) for k, v in schema.items()},  # pyright: ignore[reportArgumentType]
+            namespace=Namespace(
+                catalog=phys_table.catalog or self.default_catalog, database=phys_table.db
+            ),
+        ).to_expr()
+
+        return self.fetchdf(
+            ibis.to_sql(ibis_wrapper.describe(), dialect=self.engine_adapter.dialect),
+        )
+
 
 class Context(GenericContext[Config]):
     CONFIG_TYPE = Config
