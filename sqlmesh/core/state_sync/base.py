@@ -242,6 +242,8 @@ class StateReader(abc.ABC):
         """
         from sqlmesh._version import __version__ as SQLMESH_VERSION
 
+        SQLMESH_VERSION = "0.224.0"
+
         versions = self._get_versions()
 
         if validate:
